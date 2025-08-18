@@ -1,0 +1,33 @@
+@startuml
+title Sequence with conditional SSO login and quick actions
+
+actor User
+participant UI as "Streamlit UI"
+participant Agent as "LangChain Agent"
+participant Tools as "Tools"
+participant Scraper as "Playwright Scraper"
+participant MS as "Microsoft Login"
+participant Site as "Internal Website"
+participant FS as "File System"
+
+User -> UI : Click "Extract all pages"
+UI -> Agent : chat: "Extract with rows_per_page=X using this config"
+Agent -> Tools : extract_all_pages(config, rows_per_page)
+Tools -> Scraper : launch + goto base URL
+Scraper -> MS : detect login page
+Scraper -> MS : fill username/password, Next, Sign in
+Scraper -> MS : handle "Stay signed in"
+Scraper -> Site : redirect back to app
+loop pages
+  Scraper -> Site : read table rows
+  Scraper -> Site : click Next
+end
+Tools --> Agent : DataFrame summary
+Agent --> UI : "Extracted N rows across P pages"
+User -> UI : Click "Save CSV"
+UI -> Agent : chat: "Use save_csv to write to path"
+Agent -> Tools : save_csv(path)
+Tools -> FS : write file
+Agent --> UI : "Saved"
+
+@enduml

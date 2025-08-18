@@ -1,0 +1,127 @@
+{
+    "browser": "chromium",
+    "headless": true,
+    "base_url": "https://example.com/app",
+    "storage_state_path": null,
+    "wait_targets": [
+        {
+            "selector": "table:has(tbody tr)",
+            "engine": "css",
+            "state": "attached",
+            "timeout_ms": 20000
+        }
+    ],
+    "spinners_to_hide": [
+        {
+            "selector": ".loading, .spinner, .overlay",
+            "engine": "css",
+            "state": "hidden",
+            "timeout_ms": 15000
+        }
+    ],
+    "frames": [],
+    "selectors": {
+        "table_container": {
+            "candidates": [
+                {
+                    "selector": "[data-qa='table-root']",
+                    "engine": "css",
+                    "state": "visible"
+                },
+                {
+                    "selector": "table:has(tbody tr)",
+                    "engine": "css",
+                    "state": "attached"
+                },
+                {
+                    "selector": "//table[.//tbody/tr]",
+                    "engine": "xpath",
+                    "state": "attached"
+                }
+            ]
+        },
+        "header_cells": {
+            "candidates": [
+                {
+                    "selector": "thead tr th",
+                    "engine": "css",
+                    "state": "attached"
+                },
+                {
+                    "selector": ".//th",
+                    "engine": "xpath",
+                    "state": "attached"
+                }
+            ]
+        },
+        "row": {
+            "candidates": [
+                {
+                    "selector": "tbody tr",
+                    "engine": "css",
+                    "state": "attached",
+                    "multi_match": true
+                },
+                {
+                    "selector": ".//tr[td or th]",
+                    "engine": "xpath",
+                    "state": "attached",
+                    "multi_match": true
+                }
+            ]
+        },
+        "cell": {
+            "candidates": [
+                {
+                    "selector": "td, th",
+                    "engine": "css",
+                    "state": "attached",
+                    "multi_match": true
+                },
+                {
+                    "selector": ".//td | .//th",
+                    "engine": "xpath",
+                    "state": "attached",
+                    "multi_match": true
+                }
+            ]
+        }
+    },
+    "rows_per_page": {
+        "control": null,
+        "value": 100
+    },
+    "pagination": {
+        "strategy": "next_button",
+        "next_button": {
+            "button": {
+                "candidates": [
+                    {
+                        "selector": "[aria-label='Next page']",
+                        "engine": "css",
+                        "state": "visible"
+                    },
+                    {
+                        "selector": "button[rel='next']",
+                        "engine": "css",
+                        "state": "visible"
+                    }
+                ]
+            },
+            "disabled_checks": [
+                "aria_disabled",
+                "property_disabled"
+            ]
+        }
+    },
+    "header_strategy": {
+        "fallback_headers": []
+    },
+    "data_normalization": {
+        "trim_whitespace": true,
+        "collapse_spaces": true,
+        "dedupe_rows": true,
+        "max_pages": 0,
+        "max_rows": 0
+    }
+}
