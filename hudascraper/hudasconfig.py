@@ -71,13 +71,13 @@ def _unwrap_optional(t: Any) -> Any:
             return non_none[0]
     return t
 
-def _coerce_value(val: Any, target_type: type[Any]) -> Any:
+def coerce_value(val: Any, target_type: type[Any]) -> Any:
     # Handle Optional[...] 
     inner_type = _unwrap_optional(target_type)
 
     # Dataclass instance from dict
     if is_dataclass(inner_type) and isinstance(val, dict):
-        return _coerce_nested(val, inner_type)
+        return coerce_nested(val, inner_type)
 
     origin = get_origin(inner_type)
     args = get_args(inner_type)
@@ -86,21 +86,21 @@ def _coerce_value(val: Any, target_type: type[Any]) -> Any:
     if origin in (list, tuple) and args:
         inner_arg = args[0]
         return type(val)(
-            _coerce_value(v, inner_arg) for v in val
+            coerce_value(v, inner_arg) for v in val
         )
 
     # Dict[..., SomeDataclass]
     if origin is dict and len(args) == 2:
         key_type, value_type = args
         return {
-            _coerce_value(k, key_type): _coerce_value(v, value_type)
+            coerce_value(k, key_type): coerce_value(v, value_type)
             for k, v in val.items()
         }
 
     # Pass through untouched
     return val
 
-def _coerce_nested(obj: dict, cls: type[Any]) -> Any:
+def coerce_nested(obj: dict, cls: type[Any]) -> Any:
     if not is_dataclass(cls):
         return obj
 
@@ -111,10 +111,10 @@ def _coerce_nested(obj: dict, cls: type[Any]) -> Any:
         val = obj[f.name]
         if val is MISSING:
             continue
-        kwargs[f.name] = _coerce_value(val, f.type)
+        kwargs[f.name] = coerce_value(val, f.type)
 
     return cls(**kwargs)
 
 def load_config(path: str | Path) -> Config:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    return _coerce_nested(raw, Config)
+    return coerce_nested(raw, Config)

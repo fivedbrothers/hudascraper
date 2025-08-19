@@ -13,7 +13,7 @@ Returned structure:
 - pandas.DataFrame with .attrs["page_count"] = int
 
 Run:
-  python generic_scraper.py --config selectors.json
+  python generic_scraper.py --cfg config.json --csv data.csv
 
 Requires:
   pip install playwright pandas
@@ -33,17 +33,14 @@ from playwright.sync_api import (
     Page,
     sync_playwright,
 )
-from playwright.sync_api import (
-    TimeoutError as PwTimeout,
-)
 
-from hudasession import is_logged_in, load_context, save_context, wait_until
-from hudasconfig import (
+from .hudasconfig import (
     Config,
     SelectorCandidate,
     SelectorSet,
     load_config,
 )
+from .hudasession import is_logged_in, load_context, save_context, wait_until
 
 UNSTABLE_PATTERNS = [
     r":nth-(child|of-type)\(",  # brittle positional CSS
@@ -539,7 +536,7 @@ class GenericScraper:
 # ----------------------------
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cfg", type=str, required=True, help="Path to selectors JSON")
     ap.add_argument("--csv", type=str, default="", help="Optional path to export CSV")

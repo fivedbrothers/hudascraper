@@ -6,7 +6,7 @@ from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page
 
-from hudasconfig import Config
+from .hudasconfig import Config
 
 
 def _state_file(cfg: Config) -> Path:
