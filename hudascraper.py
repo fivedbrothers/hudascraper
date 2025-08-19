@@ -23,16 +23,12 @@ Requires:
 from __future__ import annotations
 
 import argparse
-import json
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
-from typing import Literal
 
 import pandas as pd
 from playwright.sync_api import (
-    BrowserContext,
     Locator,
     Page,
     sync_playwright,
@@ -41,55 +37,25 @@ from playwright.sync_api import (
     TimeoutError as PwTimeout,
 )
 
+from hudasession import is_logged_in, load_context, save_context, wait_until
+from hudasconfig import (
+    Config,
+    SelectorCandidate,
+    SelectorSet,
+    load_config,
+)
+
 UNSTABLE_PATTERNS = [
     r":nth-(child|of-type)\(",  # brittle positional CSS
-    r"//.*text\(\)\s*=",        # text-based XPath
-    r"^/{1,2}(?!html)",         # absolute XPaths from root (allow 'html' root narrowly)
+    r"//.*text\(\)\s*=",  # text-based XPath
+    r"^/{1,2}(?!html)",  # absolute XPaths from root (allow 'html' root narrowly)
 ]
 
-@dataclass
-class SelectorCandidate:
-    selector: str
-    engine: Literal["css", "xpath"] = "css"
-    state: Literal["attached", "visible", "hidden"] = "attached"
-    timeout_ms: int = 10000
-    allow_unstable: bool = False
-    multi_match: bool = False
-    strict: bool = True  # TODO(Mark Dasco): implement handling of this data
-
-@dataclass
-class SelectorSet:
-    candidates: list[SelectorCandidate]
-
-@dataclass
-class PaginationConfig:
-    strategy: Literal["next_button", "load_more", "numbered", "infinite_scroll"] = "next_button"
-    next_button: dict | None = None
-    load_more: dict | None = None
-    numbered: dict | None = None
-    infinite_scroll: dict | None = None
-
-@dataclass
-class Config:
-    browser: Literal["chromium", "firefox", "webkit"] = "chromium"
-    headless: bool = True
-    base_url: str = ""
-    storage_state_path: str | None = None
-
-    frames: list[dict] = field(default_factory=list)
-    wait_targets: list[dict] = field(default_factory=list)
-    spinners_to_hide: list[dict] = field(default_factory=list)
-
-    selectors: dict = field(default_factory=dict)
-    rows_per_page: dict = field(default_factory=dict)
-    pagination: PaginationConfig | None = None
-
-    header_strategy: dict = field(default_factory=dict)
-    data_normalization: dict = field(default_factory=dict)
 
 # ----------------------------
 # Selector resolution
 # ----------------------------
+
 
 class SelectorResolver:
     def __init__(self, page: Page):
@@ -138,13 +104,18 @@ class SelectorResolver:
             return root.locator(cand.selector)
         return root.locator(f"xpath={cand.selector}")
 
+
 # ----------------------------
 # Authentication hook (optional)
 # ----------------------------
 
+
 class AuthStrategy:
-    def login(self, page: Page, cfg: Config, resolver: SelectorResolver):  # pragma: no cover
+    def login(
+        self, page: Page, cfg: Config, resolver: SelectorResolver
+    ):  # pragma: no cover
         return
+
 
 # Example: Microsoft SSO (selectors must be provided in config if used)
 class MsSsoAuth(AuthStrategy):
@@ -156,7 +127,9 @@ class MsSsoAuth(AuthStrategy):
     def login(self, page: Page, cfg: Config, resolver: SelectorResolver):
         if not (self.username and self.password):
             return
-        if "login.microsoftonline.com" not in (page.url or "") and "login.live.com" not in (page.url or ""):
+        if "login.microsoftonline.com" not in (
+            page.url or ""
+        ) and "login.live.com" not in (page.url or ""):
             return
 
         email = cfg.selectors.get("ms_email")
@@ -170,7 +143,9 @@ class MsSsoAuth(AuthStrategy):
             return SelectorSet([SelectorCandidate(**c) for c in ss["candidates"]])
 
         deadline = monotonic() + self.timeout_s
-        def left(): return max(0.0, deadline - monotonic())
+
+        def left():
+            return max(0.0, deadline - monotonic())
 
         try:
             resolver.locate(page, mk(email)).fill(self.username)
@@ -179,27 +154,37 @@ class MsSsoAuth(AuthStrategy):
             resolver.locate(page, mk(signin)).click()
 
             while left() > 0:
-                if "login.microsoftonline.com" not in page.url and "login.live.com" not in page.url:
+                if (
+                    "login.microsoftonline.com" not in page.url
+                    and "login.live.com" not in page.url
+                ):
                     break
                 page.wait_for_timeout(250)
         except Exception:
             pass
 
+
 # ----------------------------
 # Pagination strategies
 # ----------------------------
 
+
 class Paginator:
     def next_page(self) -> bool:  # pragma: no cover
         raise NotImplementedError
+
 
 class NextButtonPaginator(Paginator):
     def __init__(self, root: Locator | Page, resolver: SelectorResolver, btn_cfg: dict):
         self.root = root
         self.resolver = resolver
         button = btn_cfg.get("button") or {"candidates": []}
-        self.btn_set = SelectorSet([SelectorCandidate(**c) for c in button["candidates"]])
-        self.disabled_checks = btn_cfg.get("disabled_checks", ["aria_disabled", "property_disabled"])
+        self.btn_set = SelectorSet(
+            [SelectorCandidate(**c) for c in button["candidates"]]
+        )
+        self.disabled_checks = btn_cfg.get(
+            "disabled_checks", ["aria_disabled", "property_disabled"]
+        )
 
     def next_page(self) -> bool:
         try:
@@ -220,11 +205,17 @@ class NextButtonPaginator(Paginator):
         except Exception:
             return False
 
+
 class LoadMorePaginator(Paginator):
     def __init__(self, root: Locator | Page, resolver: SelectorResolver, cfg: dict):
         self.root = root
         self.resolver = resolver
-        self.btn_set = SelectorSet([SelectorCandidate(**c) for c in (cfg.get("button") or {"candidates": []})["candidates"]])
+        self.btn_set = SelectorSet(
+            [
+                SelectorCandidate(**c)
+                for c in (cfg.get("button") or {"candidates": []})["candidates"]
+            ]
+        )
 
     def next_page(self) -> bool:
         try:
@@ -234,12 +225,15 @@ class LoadMorePaginator(Paginator):
         except Exception:
             return False
 
+
 class NumberedPaginator(Paginator):
     def __init__(self, root: Locator | Page, resolver: SelectorResolver, cfg: dict):
         self.root = root
         self.resolver = resolver
         container = cfg.get("container") or {"candidates": []}
-        self.container_set = SelectorSet([SelectorCandidate(**c) for c in container["candidates"]])
+        self.container_set = SelectorSet(
+            [SelectorCandidate(**c) for c in container["candidates"]]
+        )
         self.pattern = cfg.get("next_page_pattern", "a[aria-label='Page {n}']")
         self.n = cfg.get("start_from", 2)
 
@@ -253,6 +247,7 @@ class NumberedPaginator(Paginator):
             return True
         except Exception:
             return False
+
 
 class InfiniteScrollPaginator(Paginator):
     def __init__(self, root: Locator | Page, cfg: dict):
@@ -273,24 +268,38 @@ class InfiniteScrollPaginator(Paginator):
         self._count += 1
         return True
 
+
 # ----------------------------
 # Extraction
 # ----------------------------
 
+
 class GenericExtractor:
-    def __init__(self, resolver: SelectorResolver, cfg: Config, page_or_root: Locator | Page):
+    def __init__(
+        self, resolver: SelectorResolver, cfg: Config, page_or_root: Locator | Page
+    ):
         self.r = resolver
         self.cfg = cfg
         self.root = page_or_root
 
         sel = cfg.selectors
-        self.table_container = SelectorSet([SelectorCandidate(**c) for c in sel["table_container"]["candidates"]])
+        self.table_container = SelectorSet(
+            [SelectorCandidate(**c) for c in sel["table_container"]["candidates"]]
+        )
 
         hdr_cfg = sel.get("header_cells")
-        self.header_cells = SelectorSet([SelectorCandidate(**c) for c in hdr_cfg["candidates"]]) if hdr_cfg else None
+        self.header_cells = (
+            SelectorSet([SelectorCandidate(**c) for c in hdr_cfg["candidates"]])
+            if hdr_cfg
+            else None
+        )
 
-        self.row = SelectorSet([SelectorCandidate(**c) for c in sel["row"]["candidates"]])
-        self.cell = SelectorSet([SelectorCandidate(**c) for c in sel["cell"]["candidates"]])
+        self.row = SelectorSet(
+            [SelectorCandidate(**c) for c in sel["row"]["candidates"]]
+        )
+        self.cell = SelectorSet(
+            [SelectorCandidate(**c) for c in sel["cell"]["candidates"]]
+        )
 
     def read_page(self) -> tuple[list[str] | None, list[list[str]]]:
         container = self.r.locate(self.root, self.table_container)
@@ -319,8 +328,11 @@ class GenericExtractor:
                 texts = []
             else:
                 first = cell_cands[0]
-                cells_loc = (r.locator(first.selector) if first.engine == "css"
-                             else r.locator(f"xpath={first.selector}"))
+                cells_loc = (
+                    r.locator(first.selector)
+                    if first.engine == "css"
+                    else r.locator(f"xpath={first.selector}")
+                )
                 texts = cells_loc.all_inner_texts()
             rows.append([self._norm(t) for t in texts])
 
@@ -335,9 +347,11 @@ class GenericExtractor:
             s = re.sub(r"\s+", " ", s)
         return s
 
+
 # ----------------------------
 # Scraper runtime
 # ----------------------------
+
 
 class GenericScraper:
     def __init__(self, cfg: Config, auth: AuthStrategy | None = None):
@@ -347,18 +361,35 @@ class GenericScraper:
 
         browser_type = getattr(self._play, cfg.browser)
         browser = browser_type.launch(headless=cfg.headless)
-        if cfg.storage_state_path:
-            context = browser.new_context(storage_state=cfg.storage_state_path)
-        else:
-            context = browser.new_context()
-        self.context: BrowserContext = context
-        self.page: Page = context.new_page()
+
+        self.context, self._state_reused = load_context(browser, cfg)
+
+        self.page: Page = self.context.new_page()
 
     def close(self):
         try:
             self.context.close()
         finally:
             self._play.stop()
+
+    def _ensure_authenticated(self):
+        self.page.goto(self.cfg.base_url, wait_until="domcontentloaded")
+        resolver = SelectorResolver(self.page)
+
+        if not self._state_reused and not is_logged_in(self.page, self.cfg):
+            # trigger whatever login strategy is in use
+            if self.auth:
+                self.auth.login(self.page, self.cfg, resolver)
+
+            # wait for post-login condition
+            wait_until(
+                lambda: is_logged_in(self.page, self.cfg),
+                self.cfg.session.auth_timeout_s,
+            )
+
+            # save successful state for next run
+            if is_logged_in(self.page, self.cfg):
+                save_context(self.context, self.cfg)
 
     def _enter_frames(self, resolver: SelectorResolver) -> Locator | Page:
         root: Locator | Page = self.page
@@ -399,8 +430,15 @@ class GenericScraper:
         if not control_cfg:
             return
         try:
-            control = resolver.locate(root, SelectorSet([SelectorCandidate(**c) for c in control_cfg["candidates"]]))
-            tag = (control.evaluate("el => el.tagName && el.tagName.toLowerCase()") or "").lower()
+            control = resolver.locate(
+                root,
+                SelectorSet(
+                    [SelectorCandidate(**c) for c in control_cfg["candidates"]]
+                ),
+            )
+            tag = (
+                control.evaluate("el => el.tagName && el.tagName.toLowerCase()") or ""
+            ).lower()
             if tag == "select":
                 control.select_option(val)
             else:
@@ -410,14 +448,20 @@ class GenericScraper:
         except Exception:
             pass
 
-    def _make_paginator(self, resolver: SelectorResolver, root: Locator | Page) -> Paginator:
+    def _make_paginator(
+        self, resolver: SelectorResolver, root: Locator | Page
+    ) -> Paginator:
         pc = self.cfg.pagination
         if not pc:
             return NextButtonPaginator(root, resolver, {"button": {"candidates": []}})
         if pc.strategy == "next_button":
-            return NextButtonPaginator(root, resolver, pc.next_button or {"button": {"candidates": []}})
+            return NextButtonPaginator(
+                root, resolver, pc.next_button or {"button": {"candidates": []}}
+            )
         if pc.strategy == "load_more":
-            return LoadMorePaginator(root, resolver, pc.load_more or {"button": {"candidates": []}})
+            return LoadMorePaginator(
+                root, resolver, pc.load_more or {"button": {"candidates": []}}
+            )
         if pc.strategy == "numbered":
             return NumberedPaginator(root, resolver, pc.numbered or {})
         if pc.strategy == "infinite_scroll":
@@ -426,15 +470,9 @@ class GenericScraper:
         raise ValueError(msg)
 
     def run(self) -> pd.DataFrame:
-        p = self.page
-        p.goto(self.cfg.base_url, wait_until="domcontentloaded")
+        self._ensure_authenticated()
 
-        resolver = SelectorResolver(p)
-
-        # Optional auth hook (prefer storage_state overall)
-        if self.auth:
-            self.auth.login(p, self.cfg, resolver)
-
+        resolver = SelectorResolver(self.page)
         root = self._enter_frames(resolver)
         self._wait_ready(resolver, root)
         self._set_rows_per_page(resolver, root)
@@ -466,14 +504,16 @@ class GenericScraper:
                 if max_rows and len(all_rows) >= max_rows:
                     break
 
-            if (max_pages and page_i >= max_pages) or (max_rows and len(all_rows) >= max_rows):
+            if (max_pages and page_i >= max_pages) or (
+                max_rows and len(all_rows) >= max_rows
+            ):
                 break
 
             if not paginator.next_page():
                 break
 
             # Small pause to allow DOM to update between pages
-            p.wait_for_timeout(250)
+            self.page.wait_for_timeout(250)
 
         dframe = self._to_dataframe(all_rows, header)
         dframe.attrs["page_count"] = page_i
@@ -484,45 +524,49 @@ class GenericScraper:
         if not rows:
             return pd.DataFrame()
         max_len = max(len(r) for r in rows)
-        norm = [r + [""] * (max_len - len(r)) if len(r) < max_len else r[:max_len] for r in rows]
+        norm = [
+            r + [""] * (max_len - len(r)) if len(r) < max_len else r[:max_len]
+            for r in rows
+        ]
         if header and len(header) == max_len:
             cols = [c if c else f"col_{i}" for i, c in enumerate(header)]
             return pd.DataFrame(norm, columns=cols)
         return pd.DataFrame(norm, columns=[f"col_{i}" for i in range(max_len)])
 
-# ----------------------------
-# Utilities: load config
-# ----------------------------
-
-def load_config(path: str | Path) -> Config:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
-    # Coerce nested dicts into dataclasses where needed
-    pag = raw.get("pagination")
-    if pag:
-        raw["pagination"] = PaginationConfig(**pag)
-    return Config(**raw)
 
 # ----------------------------
 # CLI
 # ----------------------------
 
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, required=True, help="Path to selectors JSON")
+    ap.add_argument("--cfg", type=str, required=True, help="Path to selectors JSON")
     ap.add_argument("--csv", type=str, default="", help="Optional path to export CSV")
+    ap.add_argument("--usr", help="Session username (for session keying)")
+    ap.add_argument("--ms-username")
+    ap.add_argument("--ms-password")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = load_config(args.cfg)
 
-    scraper = GenericScraper(cfg)
+    if args.usr:
+        cfg.session.user = args.usr
+
+    auth = None
+    if args.ms_username and args.ms_password:
+        auth = MsSsoAuth(args.ms_username, args.ms_password)
+
+    scraper = GenericScraper(cfg=cfg, auth=auth)
+
     try:
         dframe = scraper.run()
     finally:
         scraper.close()
 
-    print(f"Rows: {len(dframe)} | Cols: {len(dframe.columns)} | Pages: {dframe.attrs.get('page_count')}")
+    print(
+        f"Rows: {len(dframe)} | Cols: {len(dframe.columns)} | Pages: {dframe.attrs.get('page_count')}",
+    )
     print(dframe.head(10).to_string(index=False))
 
     if args.csv:
@@ -530,6 +574,7 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         dframe.to_csv(out, index=False, encoding="utf-8")
         print(f"Saved CSV to: {out}")
+
 
 if __name__ == "__main__":
     main()

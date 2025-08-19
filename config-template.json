@@ -2,7 +2,15 @@
     "browser": "chromium",
     "headless": true,
     "base_url": "https://example.com/app",
-    "storage_state_path": null,
+    "session": {
+        "path": null,
+        "user": "hudas@yourcompany.com",
+        "site_host": "practice.expandtesting.com",
+        "reuse": true,
+        "save_on_success": true,
+        "auth_timeout_s": 180,
+        "headed_on_first_run": true
+    },
     "wait_targets": [
         {
             "selector": "table:has(tbody tr)",
