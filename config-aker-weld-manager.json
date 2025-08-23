@@ -1,0 +1,79 @@
+{
+  "browser": "chromium",
+  "headless": false,
+  "base_url": "https://weldmanager.akersolutions.com/readonly",
+  "session": {
+    "path": null,
+    "user": "michael.john.dasco",
+    "site_host": "weldmanager.akersolutions.com",
+    "reuse": true,
+    "save_on_success": true,
+    "auth_timeout_s": 600,
+    "headed_on_first_run": true
+  },
+
+  "wait_targets": [
+    { "selector": "table:has(tbody tr)", "engine": "css", "state": "attached", "timeout_ms": 20000 }
+  ],
+
+  "spinners_to_hide": [],
+
+  "frames": [],
+
+  "selectors": {
+    "table_container": {
+      "candidates": [
+        { "selector": "table:has(tbody tr)", "engine": "css", "state": "attached" },
+        { "selector": "//table[.//tbody/tr]", "engine": "xpath", "state": "attached" }
+      ]
+    },
+    "header_cells": {
+      "candidates": [
+        { "selector": "thead tr th", "engine": "css", "state": "attached" },
+        { "selector": ".//thead//th", "engine": "xpath", "state": "attached" }
+      ]
+    },
+    "row": {
+      "candidates": [
+        { "selector": "tbody tr", "engine": "css", "state": "attached", "multi_match": true },
+        { "selector": ".//tbody//tr", "engine": "xpath", "state": "attached", "multi_match": true }
+      ]
+    },
+    "cell": {
+      "candidates": [
+        { "selector": "td, th", "engine": "css", "state": "attached", "multi_match": true },
+        { "selector": ".//td | .//th", "engine": "xpath", "state": "attached", "multi_match": true }
+      ]
+    }
+  },
+
+  "rows_per_page": {
+    "control": null,
+    "value": 100
+  },
+
+  "pagination": {
+    "strategy": "next_button",
+    "next_button": {
+      "button": {
+        "candidates": [
+          { "selector": "li.page-item.next:not(.disabled) a.page-link", "engine": "css", "state": "visible" },
+          { "selector": "nav[aria-label='Pagination'] li.next:not(.disabled) a", "engine": "css", "state": "visible" }
+        ]
+      },
+      "disabled_checks": ["aria_disabled", "property_disabled"]
+    }
+  },
+
+  "header_strategy": {
+    "fallback_headers": []
+  },
+
+  "data_normalization": {
+    "trim_whitespace": true,
+    "collapse_spaces": true,
+    "dedupe_rows": true,
+    "max_pages": 0,
+    "max_rows": 0
+  }
+}
