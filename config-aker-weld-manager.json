@@ -1,9 +1,9 @@
 {
   "browser": "chromium",
-  "headless": false,
+  "headless": true,
   "base_url": "https://weldmanager.akersolutions.com/readonly",
   "session": {
-    "path": null,
+    "path": "./.sessions/aker-weld-manager-session.json",
     "user": "michael.john.dasco",
     "site_host": "weldmanager.akersolutions.com",
     "reuse": true,
@@ -21,6 +21,33 @@
   "frames": [],
 
   "selectors": {
+      "ms_app_signin": {
+        "candidates": [
+          { "selector": "#ms-signin, button[data-qa='ms-signin'], button[id*='microsoft']", "engine": "css", "state": "visible" }
+        ]
+      },
+      "ms_email": {
+        "candidates": [
+          { "selector": "input[name='loginfmt']", "engine": "css", "state": "visible" },
+          { "selector": "input[type='email']", "engine": "css", "state": "visible" }
+        ]
+      },
+      "ms_next": {
+        "candidates": [
+          { "selector": "#idSIButton9, input[type='submit'][value='Next'], button[data-report-event='Signin_Submit']", "engine": "css", "state": "visible" }
+        ]
+      },
+      "ms_password": {
+        "candidates": [
+          { "selector": "input[name='passwd'], input[type='password']", "engine": "css", "state": "visible" }
+        ]
+      },
+      "ms_signin": {
+        "candidates": [
+          { "selector": "#idSIButton9, input[type='submit'][value='Sign in'], button[data-report-event='Signin_Submit']", "engine": "css", "state": "visible" }
+        ]
+      },
+      "ms_redirect_wait_s": 8,
     "table_container": {
       "candidates": [
         { "selector": "table:has(tbody tr)", "engine": "css", "state": "attached" },

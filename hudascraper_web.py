@@ -1,4 +1,7 @@
+import contextlib
 import json
+import logging
+import subprocess
 import time
 from typing import Any
 
@@ -7,6 +10,9 @@ import requests
 import streamlit as st
 
 from hudascraper.web import ServerManager
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # ----------------------------
 # Page setup
@@ -48,6 +54,12 @@ def get_manager() -> ServerManager:
 
 sm = get_manager()
 
+# Ensure the managed server is stopped when this process exits
+import atexit
+
+with contextlib.suppress(Exception):
+    atexit.register(lambda: sm.stop())
+
 # Persist last run across tabs
 if "last_run_id" not in st.session_state:
     st.session_state.last_run_id = ""
@@ -59,10 +71,16 @@ st.sidebar.header("Server")
 app_path = st.sidebar.text_input("Application Path", sm.app_path)
 host = st.sidebar.text_input("Host", sm.host)
 port = st.sidebar.number_input(
-    "Port", min_value=1, max_value=65535, value=sm.port, step=1,
+    "Port",
+    min_value=1,
+    max_value=65535,
+    value=sm.port,
+    step=1,
 )
 reload = st.sidebar.checkbox(
-    "Enable reload (dev)", value=sm.reload, help="May disrupt log capture",
+    "Enable reload (dev)",
+    value=sm.reload,
+    help="May disrupt log capture",
 )
 
 apply = st.sidebar.button("Apply settings", use_container_width=True)
@@ -83,14 +101,16 @@ if start:
     try:
         sm.start()
         st.sidebar.success("Start requested.")
-    except Exception as e:
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        logger.exception("Server start failed")
         st.sidebar.error(f"Failed to start: {e}")
 
 if stop:
     try:
         sm.stop()
         st.sidebar.info("Stop requested.")
-    except Exception as e:
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        logger.exception("Server stop failed")
         st.sidebar.error(f"Failed to stop: {e}")
 
 # ----------------------------
@@ -131,7 +151,7 @@ st.divider()
 def _safe_json_loads(s: str) -> str:
     try:
         return json.loads(s)
-    except Exception as e:
+    except (json.JSONDecodeError, TypeError) as e:
         msg = f"Invalid JSON: {e}"
         raise ValueError(msg)
 
@@ -202,8 +222,9 @@ with tab_scrape:
                     content = uploaded.read().decode("utf-8")
                     config_obj = _safe_json_loads(content)
                     st.success("Config loaded.")
-                except Exception as e:
+                except (ValueError, UnicodeDecodeError) as e:
                     st.error(str(e))
+                    logger.debug("Config upload failed: %s", e)
         else:
             cfg_text = st.text_area(
                 "Paste JSON",
@@ -213,8 +234,9 @@ with tab_scrape:
             if cfg_text.strip():
                 try:
                     config_obj = _safe_json_loads(cfg_text)
-                except Exception as e:
+                except ValueError as e:
                     st.error(str(e))
+                    logger.debug("Pasted config failed to parse: %s", e)
 
     with col_right:
         st.markdown("**Credentials**")
@@ -278,49 +300,64 @@ with tab_scrape:
                         run_id = str(res.get("run_id", ""))
                         if not run_id:
                             st.warning(
-                                f"Scrape submitted, but no run_id returned. Response: {res}"
+                                f"Scrape submitted, but no run_id returned. Response: {res}",
                             )
                         else:
                             st.session_state.last_run_id = run_id
                             st.success(f"Scrape started. run_id: {run_id}")
 
-                    if auto_fetch and run_id:
-                        st.divider()
-                        st.markdown("#### Extracted data")
-                        try:
-                            # Light polling in case results write is async
-                            dframe: pd.DataFrame | None = None
-                            for _ in range(10):
-                                try:
+                        if auto_fetch and run_id:
+                            st.divider()
+                            st.markdown("#### Extracted data")
+                            try:
+                                # Light polling in case results write is async
+                                dframe: pd.DataFrame | None = None
+                                for _ in range(10):
+                                    try:
+                                        dframe = _get_results(sm.base_url(), run_id)
+                                        break
+                                    except requests.RequestException:
+                                        time.sleep(0.8)
+                                if dframe is None:
                                     dframe = _get_results(sm.base_url(), run_id)
-                                    break
-                                except Exception:
-                                    time.sleep(0.8)
-                            if dframe is None:
-                                dframe = _get_results(sm.base_url(), run_id)
 
-                            if dframe.empty:
-                                st.info("No rows returned.")
-                            else:
-                                st.dataframe(dframe, use_container_width=True, height=420)
-                                csv = dframe.to_csv(index=False).encode("utf-8")
-                                st.download_button(
-                                    "Download CSV",
-                                    data=csv,
-                                    file_name=f"hudascraper_{run_id}.csv",
-                                    mime="text/csv",
-                                    use_container_width=True,
+                                if dframe.empty:
+                                    st.info("No rows returned.")
+                                else:
+                                    st.dataframe(
+                                        dframe,
+                                        use_container_width=True,
+                                        height=420,
+                                    )
+                                    csv = dframe.to_csv(index=False).encode("utf-8")
+                                    st.download_button(
+                                        "Download CSV",
+                                        data=csv,
+                                        file_name=f"hudascraper_{run_id}.csv",
+                                        mime="text/csv",
+                                        use_container_width=True,
+                                    )
+                            except (requests.RequestException, ValueError) as e:
+                                st.warning(f"Unable to fetch results yet: {e}")
+                                logger.debug("Fetching results failed: %s", e)
+                            except Exception:
+                                logger.exception("Unexpected error fetching results")
+                                st.warning(
+                                    "Unable to fetch results yet: an unexpected error occurred"
                                 )
-                        except Exception as e:
-                            st.warning(f"Unable to fetch results yet: {e}")
             except requests.HTTPError as http_err:
                 try:
                     err_json = http_err.response.json()
-                except Exception:
+                except ValueError:
                     err_json = http_err.response.text
                 st.error(f"HTTP {http_err.response.status_code}: {err_json}")
-            except Exception as e:
+                logger.debug("Scrape submission HTTP error: %s", http_err)
+            except (requests.RequestException, ValueError) as e:
                 st.error(f"Failed to submit scrape: {e}")
+                logger.debug("Scrape submission failed: %s", e)
+            except Exception:
+                logger.exception("Unexpected error during scrape submission")
+                st.error("Failed to submit scrape: an unexpected error occurred")
 
 # ----------------------------
 # Results tab
@@ -339,7 +376,9 @@ with tab_results:
     with col_b:
         st.markdown("&nbsp;", unsafe_allow_html=True)
         fetch_btn = st.button(
-            "Fetch results", use_container_width=True, disabled=not run_id_in
+            "Fetch results",
+            use_container_width=True,
+            disabled=not run_id_in,
         )
 
     if fetch_btn:
@@ -368,11 +407,16 @@ with tab_results:
                 except requests.HTTPError as http_err:
                     try:
                         err_json = http_err.response.json()
-                    except Exception:
+                    except ValueError:
                         err_json = http_err.response.text
                     st.error(f"HTTP {http_err.response.status_code}: {err_json}")
-                except Exception as e:
+                    logger.debug("Results fetch HTTP error: %s", http_err)
+                except (requests.RequestException, ValueError) as e:
                     st.error(f"Failed to fetch results: {e}")
+                    logger.debug("Results fetch failed: %s", e)
+                except Exception:
+                    logger.exception("Unexpected error fetching results")
+                    st.error("Failed to fetch results: an unexpected error occurred")
 
 # ----------------------------
 # Server logs tab

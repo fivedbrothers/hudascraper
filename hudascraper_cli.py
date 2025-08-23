@@ -1,7 +1,11 @@
 import argparse
+import logging
 from pathlib import Path
 
 from hudascraper import GenericScraper, MsSsoAuth, load_config
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 def main() -> None:
@@ -29,16 +33,19 @@ def main() -> None:
     finally:
         scraper.close()
 
-    print(
-        f"Rows: {len(dframe)} | Cols: {len(dframe.columns)} | Pages: {dframe.attrs.get('page_count')}",
+    logger.info(
+        "Rows: %s | Cols: %s | Pages: %s",
+        len(dframe),
+        len(dframe.columns),
+        dframe.attrs.get("page_count"),
     )
-    print(dframe.head(10).to_string(index=False))
+    logger.info("\n%s", dframe.head(10).to_string(index=False))
 
     if args.csv:
         out = Path(args.csv)
         out.parent.mkdir(parents=True, exist_ok=True)
         dframe.to_csv(out, index=False, encoding="utf-8")
-        print(f"Saved CSV to: {out}")
+        logger.info("Saved CSV to: %s", out)
 
 
 if __name__ == "__main__":

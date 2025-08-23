@@ -1,4 +1,7 @@
 # server_manager.py
+import atexit
+import contextlib
+import logging
 import os
 import signal
 import subprocess
@@ -8,6 +11,8 @@ import time
 from collections import deque
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class ServerManager:
@@ -34,6 +39,21 @@ class ServerManager:
         self._log_buf = deque(maxlen=log_max_lines)
         self._reader_thread: threading.Thread | None = None
         self._lock = threading.RLock()
+
+        # Register an atexit hook to ensure the managed server is stopped
+        with contextlib.suppress(Exception):
+            atexit.register(self.stop)
+
+        # Also ensure clean shutdown on common termination signals
+        def _handle_signal(signum, frame):
+            try:
+                self.stop()
+            except (OSError, RuntimeError):
+                logger.exception("Error stopping managed server from signal handler")
+
+        with contextlib.suppress(Exception):
+            signal.signal(signal.SIGTERM, _handle_signal)
+            signal.signal(signal.SIGINT, _handle_signal)
 
     # ---- Public API
 
@@ -95,8 +115,9 @@ class ServerManager:
                     os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
                 else:
                     proc.terminate()
-            except Exception as e:
+            except (OSError, ProcessLookupError) as e:
                 self._append_log(f"Terminate error: {e!r}")
+                logger.exception("Error terminating managed process")
 
         # Wait outside lock
         try:
@@ -109,8 +130,9 @@ class ServerManager:
                         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                     else:
                         proc.kill()
-                except Exception as e:
+                except (OSError, ProcessLookupError) as e:
                     self._append_log(f"Kill error: {e!r}")
+                    logger.exception("Error force-killing managed process")
                 finally:
                     self._proc = None
 
@@ -125,7 +147,7 @@ class ServerManager:
     def is_http_up(self, timeout: float = 1.2) -> bool:
         try:
             r = requests.get(self.base_url() + self.health_probe_path, timeout=timeout)
-        except Exception:
+        except requests.RequestException:
             return False
         else:
             return r.ok
@@ -134,7 +156,7 @@ class ServerManager:
         # If HTTP already up (externally started), do nothing.
         if self.is_http_up():
             return
-        # If we have a managed process, ensure it’s alive; otherwise start it.
+        # If we have a managed process, ensure it's alive; otherwise start it.
         if not self.is_managed_running():
             self.start(wait_ready_timeout=wait_ready_timeout)
 
@@ -157,10 +179,8 @@ class ServerManager:
             return
         for line in iter(proc.stdout.readline, ""):
             self._append_log(line.rstrip("\n"))
-        try:
+        with contextlib.suppress(Exception):
             proc.stdout.close()
-        except Exception:
-            pass
 
     def _append_log(self, line: str) -> None:
         with self._lock:

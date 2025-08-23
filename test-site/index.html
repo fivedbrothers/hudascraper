@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Test App - Sign In</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+  <h1>Test App</h1>
+  <p>This page simulates an application that has a "Sign in with Microsoft" button.</p>
+
+  <!-- The selector here is intended to match configs using ms_signin -->
+  <button id="ms-signin" data-qa="ms-signin">Sign in with Microsoft</button>
+
+  <script>
+    document.getElementById('ms-signin').addEventListener('click', function () {
+      // navigate to the fake MS login page
+      window.location.href = './ms-login.html';
+    });
+  </script>
+</body>
+</html>

@@ -23,15 +23,32 @@ Requires:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import logging
 import re
 from pathlib import Path
 from time import monotonic
 
-import pandas as pd
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+try:
+    import pandas as pd
+except Exception:  # pandas is an optional runtime dependency for import-time checks
+    pd = None
+    logger.debug(
+        "pandas not available; DataFrame conversion will raise at runtime if used"
+    )
+from playwright.sync_api import (
+    Error as PlaywrightError,
+)
 from playwright.sync_api import (
     Locator,
     Page,
     sync_playwright,
+)
+from playwright.sync_api import (
+    TimeoutError as PlaywrightTimeoutError,
 )
 
 from .hudasconfig import (
@@ -40,7 +57,13 @@ from .hudasconfig import (
     SelectorSet,
     load_config,
 )
-from .hudasession import is_logged_in, load_context, save_context, wait_until
+from .hudasession import (
+    _state_file,
+    is_logged_in,
+    load_context,
+    save_context,
+    wait_until,
+)
 
 UNSTABLE_PATTERNS = [
     r":nth-(child|of-type)\(",  # brittle positional CSS
@@ -73,13 +96,33 @@ class SelectorResolver:
                 self._validate(cand)
                 loc = self._loc(root, cand)
 
-                # Wait for element — use .first if multi_match is expected
-                if cand.multi_match:
-                    loc.first.wait_for(state=cand.state, timeout=cand.timeout_ms)
-                else:
-                    loc.wait_for(state=cand.state, timeout=cand.timeout_ms)
+                # Wait for element — prefer waiting on the full locator when a
+                # single match is expected, but if Playwright raises a strict
+                # mode violation (multiple elements), fall back to waiting on
+                # the first element. This handles header/cell sets that match
+                # multiple nodes (e.g., multiple <th> elements).
+                try:
+                    if cand.multi_match:
+                        loc.first.wait_for(state=cand.state, timeout=cand.timeout_ms)
+                    else:
+                        loc.wait_for(state=cand.state, timeout=cand.timeout_ms)
+                except PlaywrightError as e:
+                    # If locator resolved to multiple elements, use the first
+                    # element as a pragmatic fallback and continue; re-raise
+                    # for other Playwright errors.
+                    msg = str(e)
+                    if "strict mode violation" in msg or "resolved to" in msg:
+                        try:
+                            loc.first.wait_for(
+                                state=cand.state, timeout=cand.timeout_ms
+                            )
+                        except (PlaywrightError, PlaywrightTimeoutError):
+                            # Let the outer handler capture this as a candidate failure
+                            raise
+                    else:
+                        raise
 
-            except Exception as e:
+            except (PlaywrightError, PlaywrightTimeoutError, ValueError) as e:
                 last_err = e
                 continue
             else:
@@ -93,7 +136,7 @@ class SelectorResolver:
     def maybe(self, root: Locator | Page, selset: SelectorSet) -> Locator | None:
         try:
             return self.locate(root, selset)
-        except Exception:
+        except (PlaywrightError, PlaywrightTimeoutError, ValueError, RuntimeError):
             return None
 
     def _loc(self, root: Locator | Page, cand: SelectorCandidate) -> Locator:
@@ -114,26 +157,70 @@ class AuthStrategy:
         return
 
 
-# Example: Microsoft SSO (selectors must be provided in config if used)
+# Microsoft SSO (selectors must be provided in config if used)
 class MsSsoAuth(AuthStrategy):
     def __init__(self, username: str, password: str, timeout_s: int = 60):
         self.username = username
         self.password = password
         self.timeout_s = timeout_s
 
+    def _on_ms_host(self, page: Page) -> bool:
+        u = page.url or ""
+        return any(
+            h in u
+            for h in (
+                "login.microsoftonline.com",
+                "login.live.com",
+                "login.microsoft.com",
+            )
+        )
+
+    def _trigger_app_signin(
+        self, page: Page, cfg: Config, resolver: SelectorResolver, mk
+    ) -> None:
+        # Try clicking an app signin control (if configured) to start the redirect
+        app_signin = cfg.selectors.get("ms_app_signin") or cfg.selectors.get(
+            "ms_signin",
+        )
+        # Only suppress Playwright/browser related errors here so we don't hide other bugs
+        with contextlib.suppress(PlaywrightError, PlaywrightTimeoutError):
+            resolver.locate(page, mk(app_signin)).click()
+
+    def _wait_for_ms_host(self, page: Page, cfg: Config, max_wait: float) -> bool:
+        deadline = monotonic() + max_wait
+        while monotonic() < deadline:
+            if self._on_ms_host(page):
+                return True
+            page.wait_for_timeout(250)
+        return False
+
+    def _fill_and_submit(
+        self, page: Page, cfg: Config, resolver: SelectorResolver, mk, left
+    ) -> None:
+        # Fill email -> next -> password -> signin
+        resolver.locate(page, mk(cfg.selectors.get("ms_email"))).fill(self.username)
+        resolver.locate(page, mk(cfg.selectors.get("ms_next"))).click()
+        resolver.locate(page, mk(cfg.selectors.get("ms_password"))).fill(self.password)
+        resolver.locate(page, mk(cfg.selectors.get("ms_signin"))).click()
+
+        # wait until page leaves MS host
+        while left() > 0:
+            if not self._on_ms_host(page):
+                break
+            page.wait_for_timeout(250)
+
     def login(self, page: Page, cfg: Config, resolver: SelectorResolver):
         if not (self.username and self.password):
             return
-        if "login.microsoftonline.com" not in (
-            page.url or ""
-        ) and "login.live.com" not in (page.url or ""):
-            return
-
+        # selectors expected for MS flow
         email = cfg.selectors.get("ms_email")
         next_btn = cfg.selectors.get("ms_next")
         pwd = cfg.selectors.get("ms_password")
         signin = cfg.selectors.get("ms_signin")
         if not all([email, next_btn, pwd, signin]):
+            logger.debug(
+                "MsSsoAuth.login: MS selector set incomplete, skipping automated login"
+            )
             return
 
         def mk(ss: dict) -> SelectorSet:
@@ -144,21 +231,41 @@ class MsSsoAuth(AuthStrategy):
         def left():
             return max(0.0, deadline - monotonic())
 
-        try:
-            resolver.locate(page, mk(email)).fill(self.username)
-            resolver.locate(page, mk(next_btn)).click()
-            resolver.locate(page, mk(pwd)).fill(self.password)
-            resolver.locate(page, mk(signin)).click()
+        # If we're not on the MS-host yet, try to trigger the redirect from the app page
+        if not self._on_ms_host(page):
+            # try clicking the app sign-in control (suppress errors)
+            try:
+                self._trigger_app_signin(page, cfg, resolver, mk)
+            except (PlaywrightError, PlaywrightTimeoutError) as e:
+                # keep going — the helper already suppresses expected exceptions
+                logger.exception(
+                    "MsSsoAuth: unexpected error while triggering app signin"
+                )
 
-            while left() > 0:
-                if (
-                    "login.microsoftonline.com" not in page.url
-                    and "login.live.com" not in page.url
-                ):
-                    break
-                page.wait_for_timeout(250)
-        except Exception:
-            pass
+            # allow configurable short wait for redirect via config (selectors key)
+            redirect_wait = cfg.selectors.get("ms_redirect_wait_s")
+            try:
+                redirect_wait = (
+                    float(redirect_wait)
+                    if redirect_wait is not None
+                    else min(self.timeout_s, 8)
+                )
+            except (TypeError, ValueError):
+                redirect_wait = min(self.timeout_s, 8)
+
+            if not self._wait_for_ms_host(
+                page, cfg, min(self.timeout_s, redirect_wait)
+            ):
+                logger.debug(
+                    "MsSsoAuth.login: did not reach MS host after triggering app signin; aborting automated flow"
+                )
+                return
+
+        # Now on MS host — attempt form fill/submit
+        try:
+            self._fill_and_submit(page, cfg, resolver, mk, left)
+        except (PlaywrightError, PlaywrightTimeoutError) as e:
+            logger.exception("MsSsoAuth.login: exception during MS form fill/submit")
 
 
 # ----------------------------
@@ -184,11 +291,11 @@ class NextButtonPaginator(Paginator):
         )
 
     def next_page(self) -> bool:
-        try:
-            btn = self.resolver.locate(self.root, self.btn_set).first
-        except Exception:
+        btn_loc = self.resolver.maybe(self.root, self.btn_set)
+        if btn_loc is None:
             return False
 
+        btn = btn_loc.first
         try:
             if "property_disabled" in self.disabled_checks:
                 if btn.evaluate("el => !!el.disabled"):
@@ -199,7 +306,8 @@ class NextButtonPaginator(Paginator):
                     return False
             btn.click()
             return True
-        except Exception:
+        except (PlaywrightError, PlaywrightTimeoutError):
+            logger.debug("NextButtonPaginator: click/evaluate failed on button")
             return False
 
 
@@ -215,11 +323,13 @@ class LoadMorePaginator(Paginator):
         )
 
     def next_page(self) -> bool:
+        btn_loc = self.resolver.maybe(self.root, self.btn_set)
+        if btn_loc is None:
+            return False
         try:
-            btn = self.resolver.locate(self.root, self.btn_set)
-            btn.click()
+            btn_loc.click()
             return True
-        except Exception:
+        except (PlaywrightError, PlaywrightTimeoutError):
             return False
 
 
@@ -235,14 +345,16 @@ class NumberedPaginator(Paginator):
         self.n = cfg.get("start_from", 2)
 
     def next_page(self) -> bool:
+        container = self.resolver.maybe(self.root, self.container_set)
+        if container is None:
+            return False
         try:
-            container = self.resolver.locate(self.root, self.container_set)
             target = container.locator(self.pattern.format(n=self.n))
             target.wait_for(state="visible", timeout=3000)
             target.click()
             self.n += 1
             return True
-        except Exception:
+        except (PlaywrightError, PlaywrightTimeoutError):
             return False
 
 
@@ -259,8 +371,12 @@ class InfiniteScrollPaginator(Paginator):
             return False
         try:
             self.root.evaluate(f"el => el.scrollBy(0, {self.scroll_step})")
-        except Exception:
-            self.root.page.evaluate(f"window.scrollBy(0, {self.scroll_step})")
+        except (PlaywrightError, PlaywrightTimeoutError):
+            try:
+                self.root.page.evaluate(f"window.scrollBy(0, {self.scroll_step})")
+            except (PlaywrightError, PlaywrightTimeoutError):
+                logger.debug("InfiniteScrollPaginator: scroll attempt failed")
+                return False
         self.root.page.wait_for_timeout(self.idle_ms)
         self._count += 1
         return True
@@ -310,7 +426,7 @@ class GenericExtractor:
                 headers = [self._norm(t) for t in header_texts if t is not None]
                 if all(not h for h in headers):
                     headers = None
-            except Exception:
+            except (PlaywrightError, PlaywrightTimeoutError, ValueError):
                 headers = None
 
         # Rows and cells
@@ -356,8 +472,21 @@ class GenericScraper:
         self.auth = auth
         self._play = sync_playwright().start()
 
+        # Determine whether a saved storage state exists so we can optionally
+        # force a headed (visible) browser on the first run when requested.
+        state_path = _state_file(cfg)
+        session_exists = bool(cfg.session.reuse and state_path.exists())
+
+        headless_effective = cfg.headless
+        if not session_exists and cfg.session.headed_on_first_run:
+            # Force headed browser on first run so a user can complete MFA/manual login
+            headless_effective = False
+            logger.info(
+                "GenericScraper: no session found and headed_on_first_run=True; launching headed browser for manual login"
+            )
+
         browser_type = getattr(self._play, cfg.browser)
-        browser = browser_type.launch(headless=cfg.headless)
+        browser = browser_type.launch(headless=headless_effective)
 
         self.context, self._state_reused = load_context(browser, cfg)
 
@@ -408,14 +537,14 @@ class GenericScraper:
                 sel = SelectorSet([SelectorCandidate(**target)])
                 resolver.locate(root, sel)
                 break
-            except Exception:
+            except (PlaywrightError, PlaywrightTimeoutError, ValueError):
                 continue
         # Hide/await spinners/overlays if provided
         for sp in self.cfg.spinners_to_hide or []:
             try:
                 sel = SelectorSet([SelectorCandidate(**sp)])
                 resolver.locate(root, sel)  # e.g., state: hidden
-            except Exception:
+            except (PlaywrightError, PlaywrightTimeoutError, ValueError):
                 pass
 
     def _set_rows_per_page(self, resolver: SelectorResolver, root: Locator | Page):
@@ -442,7 +571,7 @@ class GenericScraper:
                 control.click()
                 control.fill(val)
                 control.press("Enter")
-        except Exception:
+        except (PlaywrightError, PlaywrightTimeoutError):
             pass
 
     def _make_paginator(
@@ -517,7 +646,14 @@ class GenericScraper:
         return dframe
 
     @staticmethod
-    def _to_dataframe(rows: list[list[str]], header: list[str] | None) -> pd.DataFrame:
+    def _to_dataframe(rows: list[list[str]], header: list[str] | None):
+        try:
+            import pandas as pd  # local import to keep module import lightweight
+        except Exception as e:  # pragma: no cover - environment missing pandas
+            raise RuntimeError(
+                "pandas is required to convert scraped rows to a DataFrame: install pandas"
+            ) from e
+
         if not rows:
             return pd.DataFrame()
         max_len = max(len(r) for r in rows)
@@ -561,16 +697,19 @@ def main() -> None:
     finally:
         scraper.close()
 
-    print(
-        f"Rows: {len(dframe)} | Cols: {len(dframe.columns)} | Pages: {dframe.attrs.get('page_count')}",
+    logger.info(
+        "Rows: %s | Cols: %s | Pages: %s",
+        len(dframe),
+        len(dframe.columns),
+        dframe.attrs.get("page_count"),
     )
-    print(dframe.head(10).to_string(index=False))
+    logger.info("\n%s", dframe.head(10).to_string(index=False))
 
     if args.csv:
         out = Path(args.csv)
         out.parent.mkdir(parents=True, exist_ok=True)
         dframe.to_csv(out, index=False, encoding="utf-8")
-        print(f"Saved CSV to: {out}")
+    logger.info("Saved CSV to: %s", out)
 
 
 if __name__ == "__main__":
