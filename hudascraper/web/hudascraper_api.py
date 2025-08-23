@@ -19,10 +19,10 @@ class ScrapeRequest(BaseModel):
     password: str = ""
 
 
-app = FastAPI()
+server = FastAPI()
 
 
-@app.post("/scrape")
+@server.post("/scrape")
 def scrape(
     body: Annotated[
         dict[str, Any],
@@ -76,7 +76,7 @@ def scrape(
     return {"run_id": run_id, "rows": len(dframe)}
 
 
-@app.get("/results/{run_id}")
+@server.get("/results/{run_id}")
 def get_results(run_id: str):
     run_dir = DATA_DIR / run_id
     if not run_dir.exists():
