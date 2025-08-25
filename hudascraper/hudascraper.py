@@ -30,6 +30,7 @@ from .hudasession import (
 if TYPE_CHECKING:
     # typing-only imports
     from collections.abc import Callable
+
     # Playwright types for static analysis
     try:  # pragma: no cover - only for typing
         from playwright.sync_api import Locator, Page  # type: ignore
@@ -357,7 +358,10 @@ class Paginator:
 
 class NextButtonPaginator(Paginator):
     def __init__(
-        self, root: Locator | Page, resolver: SelectorResolver, btn_cfg: dict,
+        self,
+        root: Locator | Page,
+        resolver: SelectorResolver,
+        btn_cfg: dict,
     ) -> None:
         self.root = root
         self.resolver = resolver
@@ -402,7 +406,10 @@ class NextButtonPaginator(Paginator):
 
 class LoadMorePaginator(Paginator):
     def __init__(
-        self, root: Locator | Page, resolver: SelectorResolver, cfg: dict,
+        self,
+        root: Locator | Page,
+        resolver: SelectorResolver,
+        cfg: dict,
     ) -> None:
         self.root = root
         self.resolver = resolver
@@ -432,7 +439,10 @@ class LoadMorePaginator(Paginator):
 
 class NumberedPaginator(Paginator):
     def __init__(
-        self, root: Locator | Page, resolver: SelectorResolver, cfg: dict,
+        self,
+        root: Locator | Page,
+        resolver: SelectorResolver,
+        cfg: dict,
     ) -> None:
         self.root = root
         self.resolver = resolver
@@ -774,7 +784,9 @@ class GenericScraper:
                 pass
 
     def _set_rows_per_page(
-        self, resolver: SelectorResolver, root: Locator | Page,
+        self,
+        resolver: SelectorResolver,
+        root: Locator | Page,
     ) -> None:
         cfg = self.cfg.rows_per_page or {}
         if not cfg:
