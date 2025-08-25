@@ -1,4 +1,3 @@
-import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -50,7 +49,7 @@ def test_get_results_returns_dataframe_like():
     fake_resp.json.return_value = {"items": fake_items}
     fake_resp.raise_for_status.return_value = None
 
-    with patch("hudascraper_web.requests.get", return_value=fake_resp) as get:
+    with patch("hudascraper_web.requests.get", return_value=fake_resp):
         df = web._get_results("http://example.local/", "run1")
         # Expect a pandas DataFrame; at minimum it should have iterrows
         assert hasattr(df, "iterrows")

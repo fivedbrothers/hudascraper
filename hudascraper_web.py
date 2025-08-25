@@ -92,7 +92,7 @@ if apply:
         st.sidebar.warning("Stop the server before changing settings.")
     else:
         st.session_state.server = ServerManager(
-            app_path=app_path, host=host, port=int(port), reload=reload
+            app_path=app_path, host=host, port=int(port), reload=reload,
         )
         sm = st.session_state.server
         st.sidebar.success("Settings applied.")
@@ -343,7 +343,7 @@ with tab_scrape:
                             except Exception:
                                 logger.exception("Unexpected error fetching results")
                                 st.warning(
-                                    "Unable to fetch results yet: an unexpected error occurred"
+                                    "Unable to fetch results yet: an unexpected error occurred",
                                 )
             except requests.HTTPError as http_err:
                 try:

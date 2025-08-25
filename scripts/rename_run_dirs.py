@@ -52,7 +52,7 @@ for p in sorted(DATA_DIR.iterdir()):
         mappings.append((p.name, target.name))
     except OSError:
         logger.exception(
-            "Failed to rename %s -> %s due to OS error", p.name, target.name
+            "Failed to rename %s -> %s due to OS error", p.name, target.name,
         )
 
 if not mappings:

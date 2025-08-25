@@ -3,7 +3,6 @@ import logging
 import pathlib
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
 

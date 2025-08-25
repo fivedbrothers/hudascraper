@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+# Ensure Playwright is available for integration tests; skip otherwise.
+pytest.importorskip("playwright.sync_api")
+from playwright.sync_api import sync_playwright
+
 ROOT = Path(__file__).resolve().parents[1] / "test-site"
 
 
@@ -29,13 +33,9 @@ def test_ms_sso_flow_integration():
     Playwright and browser binaries installed.
     """
     if os.environ.get("RUN_PLAYWRIGHT_INTEGRATION", "0") != "1":
-        pytest.skip(
-            "Enable with RUN_PLAYWRIGHT_INTEGRATION=1 to run Playwright integration tests"
-        )
+        pytest.skip("Set RUN_PLAYWRIGHT_INTEGRATION=1 to run Playwright integrations")
 
-    pw = pytest.importorskip("playwright.sync_api")
-    from playwright.sync_api import sync_playwright
-
+    # sync_playwright is imported at module level
     srv, thread = serve(ROOT, port=8000)
     try:
         # small delay for server to be reachable

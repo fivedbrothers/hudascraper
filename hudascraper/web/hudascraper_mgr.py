@@ -96,7 +96,7 @@ class ServerManager:
 
             # Start log reader
             self._reader_thread = threading.Thread(
-                target=self._read_stdout, name="uvicorn-log-reader", daemon=True
+                target=self._read_stdout, name="uvicorn-log-reader", daemon=True,
             )
             self._reader_thread.start()
 

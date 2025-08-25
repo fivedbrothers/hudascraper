@@ -1,0 +1,30 @@
+{
+  "browser": "chromium",
+  "headless": true,
+  "base_url": "http://127.0.0.1:8000/index.html",
+  "session": {
+    "site_host": "127.0.0.1",
+    "reuse": false,
+    "save_on_success": false,
+    "headed_on_first_run": false
+  },
+  "selectors": {
+    "ms_signin": { "candidates": [{ "selector": "#ms-signin", "engine": "css" }] },
+    "ms_email": { "candidates": [{ "selector": "#email", "engine": "css" }] },
+    "ms_next": { "candidates": [{ "selector": "#next", "engine": "css" }] },
+    "ms_password": { "candidates": [{ "selector": "#pwd", "engine": "css" }] },
+    "ms_signin_submit": { "candidates": [{ "selector": "#signin", "engine": "css" }] },
+    "logged_in_guard": "#app-root",
+    "table_container": { "candidates": [{ "selector": "#data-table", "engine": "css" }] },
+  "header_cells": { "candidates": [{ "selector": "thead th", "engine": "css" }] },
+  "row": { "candidates": [{ "selector": "tbody tr", "engine": "css" }] },
+    "cell": { "candidates": [{ "selector": "td", "engine": "css" }] }
+  },
+  "pre_actions": [
+    { "action": "click", "selector": "#ms-signin", "pause_ms": 200 }
+  ],
+  "data_normalization": {
+    "trim_whitespace": true,
+    "collapse_spaces": true
+  }
+}
